@@ -26,6 +26,7 @@ public class DeliveryService {
     private static final Logger log = LoggerFactory.getLogger(DeliveryService.class);
 
     private final DeliveryRepository deliveryRepository;
+    private final com.fooddelivery.delivery_service.publisher.DeliveryEventPublisher eventPublisher;
 
     // Simulated driver pool — in reality this would be its own service
     private static final String[] DRIVERS = {
@@ -35,8 +36,10 @@ public class DeliveryService {
             "+1-555-0101", "+1-555-0102", "+1-555-0103", "+1-555-0104", "+1-555-0105"
     };
 
-    public DeliveryService(DeliveryRepository deliveryRepository) {
+    public DeliveryService(DeliveryRepository deliveryRepository,
+                           com.fooddelivery.delivery_service.publisher.DeliveryEventPublisher eventPublisher) {
         this.deliveryRepository = deliveryRepository;
+        this.eventPublisher = eventPublisher;
     }
 
     /**
@@ -46,6 +49,13 @@ public class DeliveryService {
     @Transactional
     public void createDeliveryForOrder(Long orderId, String pickupAddress, String deliveryAddress,
                                        String customerFirstName, String customerLastName, String restaurantName) {
+        
+        // Idempotency check: Don't create delivery if it already exists for this order
+        if (deliveryRepository.findByOrderId(orderId).isPresent()) {
+            log.warn("Delivery already exists for order #{}", orderId);
+            return;
+        }
+
         int driverIndex = (int) (Math.random() * DRIVERS.length);
 
         Delivery delivery = Delivery.builder()
@@ -58,9 +68,17 @@ public class DeliveryService {
                 .assignedAt(LocalDateTime.now())
                 .build();
 
-        deliveryRepository.save(delivery);
+        Delivery savedDelivery = deliveryRepository.save(delivery);
 
-        // In microservices, publish DeliveryAssignedEvent to RabbitMQ
+        // Notify Order Service that delivery is assigned
+        eventPublisher.publishDeliveryStatusEvent(com.fooddelivery.delivery_service.dto.DeliveryStatusEvent.builder()
+                .orderId(orderId)
+                .deliveryId(savedDelivery.getId())
+                .status("ASSIGNED")
+                .driverName(savedDelivery.getDriverName())
+                .driverPhone(savedDelivery.getDriverPhone())
+                .build());
+
         log.info("NOTIFICATION: Delivery assigned to {} for order #{} — Customer: {} {}, Restaurant: {}",
                 DRIVERS[driverIndex],
                 orderId,
@@ -106,11 +124,21 @@ public class DeliveryService {
             default -> {}
         }
 
-        // In microservices, publish DeliveryStatusUpdatedEvent to RabbitMQ
+        Delivery savedDelivery = deliveryRepository.save(delivery);
+
+        // Publish event back to Order Service
+        eventPublisher.publishDeliveryStatusEvent(com.fooddelivery.delivery_service.dto.DeliveryStatusEvent.builder()
+                .orderId(savedDelivery.getOrderId())
+                .deliveryId(savedDelivery.getId())
+                .status(newStatus.name())
+                .driverName(savedDelivery.getDriverName())
+                .driverPhone(savedDelivery.getDriverPhone())
+                .build());
+
         log.info("NOTIFICATION: Delivery #{} status changed to {} for order #{}",
                 deliveryId, newStatus, delivery.getOrderId());
 
-        return DeliveryResponse.fromEntity(deliveryRepository.save(delivery));
+        return DeliveryResponse.fromEntity(savedDelivery);
     }
 
     @Transactional
