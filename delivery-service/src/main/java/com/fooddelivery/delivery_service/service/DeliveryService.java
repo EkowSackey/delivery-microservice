@@ -6,6 +6,7 @@ import com.fooddelivery.delivery_service.model.Delivery;
 import com.fooddelivery.delivery_service.repository.DeliveryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
@@ -50,12 +51,6 @@ public class DeliveryService {
     public void createDeliveryForOrder(Long orderId, String pickupAddress, String deliveryAddress,
                                        String customerFirstName, String customerLastName, String restaurantName) {
         
-        // Idempotency check: Don't create delivery if it already exists for this order
-        if (deliveryRepository.findByOrderId(orderId).isPresent()) {
-            log.warn("Delivery already exists for order #{}", orderId);
-            return;
-        }
-
         int driverIndex = (int) (Math.random() * DRIVERS.length);
 
         Delivery delivery = Delivery.builder()
@@ -68,7 +63,13 @@ public class DeliveryService {
                 .assignedAt(LocalDateTime.now())
                 .build();
 
-        Delivery savedDelivery = deliveryRepository.save(delivery);
+        Delivery savedDelivery;
+        try {
+            savedDelivery = deliveryRepository.save(delivery);
+        } catch (DataIntegrityViolationException e) {
+            log.warn("Delivery already exists for order #{} — ignoring duplicate event", orderId);
+            return;
+        }
 
         // Notify Order Service that delivery is assigned
         eventPublisher.publishDeliveryStatusEvent(com.fooddelivery.delivery_service.dto.DeliveryStatusEvent.builder()
@@ -103,7 +104,12 @@ public class DeliveryService {
 
     @Transactional(readOnly = true)
     public List<DeliveryResponse> getByStatus(String status) {
-        Delivery.DeliveryStatus deliveryStatus = Delivery.DeliveryStatus.valueOf(status.toUpperCase());
+        Delivery.DeliveryStatus deliveryStatus;
+        try {
+            deliveryStatus = Delivery.DeliveryStatus.valueOf(status.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid delivery status: " + status);
+        }
         return deliveryRepository.findByStatus(deliveryStatus)
                 .stream().map(DeliveryResponse::fromEntity).toList();
     }
@@ -113,7 +119,12 @@ public class DeliveryService {
         Delivery delivery = deliveryRepository.findById(deliveryId)
                 .orElseThrow(() -> new ResourceNotFoundException("Delivery", "id", deliveryId));
 
-        Delivery.DeliveryStatus newStatus = Delivery.DeliveryStatus.valueOf(status.toUpperCase());
+        Delivery.DeliveryStatus newStatus;
+        try {
+            newStatus = Delivery.DeliveryStatus.valueOf(status.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid delivery status: " + status);
+        }
         delivery.setStatus(newStatus);
 
         switch (newStatus) {
@@ -146,8 +157,30 @@ public class DeliveryService {
         Delivery delivery = deliveryRepository.findById(deliveryId)
                 .orElseThrow(() -> new ResourceNotFoundException("Delivery", "id", deliveryId));
         delivery.setStatus(Delivery.DeliveryStatus.FAILED);
-        deliveryRepository.save(delivery);
+        Delivery saved = deliveryRepository.save(delivery);
+
+        eventPublisher.publishDeliveryStatusEvent(com.fooddelivery.delivery_service.dto.DeliveryStatusEvent.builder()
+                .orderId(saved.getOrderId())
+                .deliveryId(saved.getId())
+                .status("FAILED")
+                .build());
 
         log.info("NOTIFICATION: Delivery #{} cancelled", deliveryId);
+    }
+
+    @Transactional
+    public void cancelDeliveryByOrderId(Long orderId) {
+        deliveryRepository.findByOrderId(orderId).ifPresent(delivery -> {
+            delivery.setStatus(Delivery.DeliveryStatus.FAILED);
+            Delivery saved = deliveryRepository.save(delivery);
+
+            eventPublisher.publishDeliveryStatusEvent(com.fooddelivery.delivery_service.dto.DeliveryStatusEvent.builder()
+                    .orderId(orderId)
+                    .deliveryId(saved.getId())
+                    .status("FAILED")
+                    .build());
+
+            log.info("NOTIFICATION: Delivery for order #{} cancelled", orderId);
+        });
     }
 }

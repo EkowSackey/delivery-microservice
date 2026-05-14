@@ -1,6 +1,7 @@
 package com.fooddelivery.delivery_service.consumer;
 
 import com.fooddelivery.delivery_service.config.RabbitMQConfig;
+import com.fooddelivery.delivery_service.dto.OrderCancelledEvent;
 import com.fooddelivery.delivery_service.dto.OrderPlacedEvent;
 import com.fooddelivery.delivery_service.service.DeliveryService;
 import org.slf4j.Logger;
@@ -19,20 +20,21 @@ public class OrderEventConsumer {
     }
 
     @RabbitListener(queues = RabbitMQConfig.DELIVERY_QUEUE)
-    public void consumeOrderEvent(Object event) {
-        if (event instanceof OrderPlacedEvent placedEvent) {
-            log.info("Received OrderPlacedEvent for order id: {}", placedEvent.getOrderId());
-            deliveryService.createDeliveryForOrder(
-                    placedEvent.getOrderId(),
-                    placedEvent.getPickupAddress(),
-                    placedEvent.getDeliveryAddress(),
-                    placedEvent.getCustomerFirstName(),
-                    placedEvent.getCustomerLastName(),
-                    placedEvent.getRestaurantName()
-            );
-        } else if (event instanceof Long orderId) {
-             log.info("Received OrderCancelledEvent for order id: {}", orderId);
-             // We will implement cancel logic in the next step
-        }
+    public void consumeOrderPlacedEvent(OrderPlacedEvent event) {
+        log.info("Received OrderPlacedEvent for order id: {}", event.getOrderId());
+        deliveryService.createDeliveryForOrder(
+                event.getOrderId(),
+                event.getPickupAddress(),
+                event.getDeliveryAddress(),
+                event.getCustomerFirstName(),
+                event.getCustomerLastName(),
+                event.getRestaurantName()
+        );
+    }
+
+    @RabbitListener(queues = RabbitMQConfig.DELIVERY_CANCEL_QUEUE)
+    public void consumeOrderCancelledEvent(OrderCancelledEvent event) {
+        log.info("Received OrderCancelledEvent for order id: {}", event.getOrderId());
+        deliveryService.cancelDeliveryByOrderId(event.getOrderId());
     }
 }

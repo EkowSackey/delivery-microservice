@@ -3,6 +3,7 @@ package com.fooddelivery.delivery_service.service;
 import com.fooddelivery.delivery_service.dto.DeliveryResponse;
 import com.fooddelivery.delivery_service.exception.ResourceNotFoundException;
 import com.fooddelivery.delivery_service.model.Delivery;
+import com.fooddelivery.delivery_service.publisher.DeliveryEventPublisher;
 import com.fooddelivery.delivery_service.repository.DeliveryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,6 +26,9 @@ class DeliveryServiceTest {
     @Mock
     private DeliveryRepository deliveryRepository;
 
+    @Mock
+    private DeliveryEventPublisher eventPublisher;
+
     @InjectMocks
     private DeliveryService deliveryService;
 
@@ -44,6 +48,9 @@ class DeliveryServiceTest {
 
     @Test
     void createDeliveryForOrder_savesDeliverySuccessfully() {
+        // Arrange
+        when(deliveryRepository.save(any(Delivery.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
         // Act
         deliveryService.createDeliveryForOrder(100L, "123 Food St", "456 Home Ave", "John", "Doe", "Pizza Place");
 
